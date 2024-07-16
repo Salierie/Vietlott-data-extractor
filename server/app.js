@@ -2,209 +2,109 @@ const cheerio = require("cheerio");
 const axios = require("axios");
 const fs = require('fs');
 const { combinations } = require('combinatorial-generators');
-const readline = require('readline');
 const path = require('path')
-
-
-function csvAppend(p, fileName, dirPath) {
-    if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-    }
-    var filePath = path.join(dirPath, fileName);
-
-    const csvContent = p.map(row => row.join(',')).join('\n') + '\n';
-
-    fs.appendFile(filePath, csvContent, 'utf8', (err) => {
-        if (err) {
-            console.error('Error appending to file:', err);
-        } 
-    });
-}
 
 
 function generateCombinations(numbers) {
     const n = numbers.length;
-    const combi = new Array();
-    combi[0] = new Array();    combi[1] = new Array(); combi[2] = new Array();    combi[3] = new Array();    combi[4] = new Array();    combi[5] = new Array();  
+    const combi = Array.from({ length: 6 }, () => []);
     for (let r = n; r > 0; r--) {
-        const combos = combinations(numbers, r); 
-        if(r==6){
-            for (const combo of combos) {
-                combi[5].push(combo);
-            }
-        }
-        else if (r==5){
-            for (const combo of combos) {
-                combi[4].push(combo);
-            }
-        }
-        else if (r==4){
-            for (const combo of combos) {
-                combi[3].push(combo);
-            }
-        }
-        else if (r==3){
-            for (const combo of combos) {
-                combi[2].push(combo);
-            }
-        }
-        else if (r==2){
-            for (const combo of combos) {
-                combi[1].push(combo);
-            }
-        }
-        else if (r==1){}
-        for (const combo of combos) {
-            combi[0].push(combo);
+        const combos = combinations(numbers, r);
+        if (r <= 6) {
+            combi[r - 1].push(...combos);
         }
     }
-    return(combi);
+    return combi;
 }
 
 
-function pickSets(numbers, n) {
-    const sets = [];
-    const setSize = 6;
+function createDirectories(baseDir, year, month, quarter) {
+    const yearDir = path.join(baseDir, year);
+    const monthDir = path.join(yearDir, month);
+    const quarterDir = path.join(yearDir, quarter);
 
-
-    for (let i = 0; i < n; i++) {
-        const startIndex = i * setSize;
-        const endIndex = startIndex + setSize;
-        if (endIndex <= numbers.length) {
-            sets.push(numbers.slice(startIndex, endIndex));
-        } else {
-            console.log(`Not enough numbers to create set ${i + 1}`);
-            break;
+    [yearDir, monthDir, quarterDir].forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
         }
-    }
+    });
 
-    return sets;
+    return { yearDir, monthDir, quarterDir };
 }
 
-async function getResults(url, n, year){
-    let results = []
-    let pairSplits = []
 
-    try{
+async function getResults(url){
+    try {
         const response = await axios.get(url);
-        const $=cheerio.load(response.data);
-        
-        const table = $('tbody');
+        const html = response.data;
+        const $ = cheerio.load(html);
+        const results = [[], []]; // Initialize a multidimensional array: [dateArray, numberArray]
 
-        table.each(
-            function(){         
-                num = $(this).find("span.home-mini-whiteball").text();
-            
-                results.push(num);             
+        // Loop through each <tr> element inside <tbody>
+        $('tbody tr').each((index, element) => {
+            const dateText = $(element).find('td').first().text().trim();
+            const datePattern = /^(CN|T\d),\s\d{2}\/\d{2}\/\d{4}$/;
+
+            // If the date matches the pattern, extract the numbers
+            if (datePattern.test(dateText)) {
+                const numbers = [];
+                $(element).find('span.home-mini-whiteball').each((index, span) => {
+                    numbers.push($(span).text().trim());
+                });
+
+                // Ensure there are exactly 6 numbers
+                if (numbers.length === 6) {
+                    results[0].push(dateText); // Add date to the dateArray
+                    results[1].push(numbers); // Add numbers to the numberArray
+                }
+            }
+        });
+        
+        return(results)
+    } catch (error) {
+        console.error('Error fetching the HTML:', error);
+        return null;
+    }
+}
+
+function saveCombinations(baseDir, date, combinations) {
+    const [day, month, year] = date.split(', ')[1].split('/');
+    const quarter = `Q${Math.ceil(parseInt(month) / 3)}`;
+    const { yearDir, monthDir, quarterDir } = createDirectories(baseDir, year, month, quarter);
+
+    combinations.forEach((combos, index) => {
+        const fileName = `${index + 1}.xlsx`;
+        const filePathYear = path.join(yearDir, fileName);
+        const filePathMonth = path.join(monthDir, fileName);
+        const filePathQuarter = path.join(quarterDir, fileName);
+
+        const data = combos.map(combo => combo.join(',')).join('\n') +'\n';
+        
+        fs.writeFileSync(filePathYear, data, { flag: 'a' });
+        fs.writeFileSync(filePathMonth, data, { flag: 'a' });
+        fs.writeFileSync(filePathQuarter, data, { flag: 'a' });
+    });
+}
+
+async function Main(url) {
+    const results = await getResults(url);
+    if (results) {
+        const baseDir = './data_xlsx';
+
+        results[0].forEach((date, index) => {
+            const numbers = results[1][index];
+            const combinations = generateCombinations(numbers);
+            saveCombinations(baseDir, date, combinations);
         });
 
-        console.log(date)
-        let resultString = results.toString();
-
-        for (let i = 0; i < resultString.length; i+=2){
-            let ball = resultString.split(' ').join("").substring(i, i+2);
-            pairSplits.push(ball);
-        }
-        let p = pairSplits
-        let sets = pickSets(p, 4)
-    
-        console.log(sets)
-
-        const dirPath = path.join(`${year}`, `${month}`);
-
-        
-        if (fs.existsSync('1.csv') || fs.existsSync('2.csv') || fs.existsSync('3.csv') || fs.existsSync('4.csv') || fs.existsSync('5.csv') || fs.existsSync('6.csv')) {
-            fs.unlinkSync('1.csv');
-            fs.unlinkSync('2.csv');
-            fs.unlinkSync('3.csv');
-            fs.unlinkSync('4.csv');
-            fs.unlinkSync('5.csv');
-            fs.unlinkSync('6.csv');
-        }
-
-        for(let i = 0; i < sets.length; i++){
-            let p = generateCombinations(sets[i])
-            for(let j = 0; j < 6; j++){
-                csvAppend(p[j],`${j+1}.csv`,dirPath)
-            }
-        }
-
-        console.log("all done");
-
-        }catch(error){
-            console.error(error);
-    }    
-}
-
-function GetYear(){
-    let date_ob = new Date();
-    let year = date_ob.getFullYear();
-    return year
-}
-
-const monthNames = [
-    "January", "February", "March", "April", "May", "June", 
-    "July", "August", "September", "October", "November", "December"
-  ];
-  
-
-const daysOfWeek = [0, 3, 5]; // 0: Sunday, 3: Wednesday, 5: Friday
-  
-function getDaysInYear(year) {
-  const days = [];
-  for (let month = 0; month < 12; month++) {
-    let date = new Date(year, month, 1);
-    while (date.getMonth() === month) {
-      if (daysOfWeek.includes(date.getDay())) {
-        days.push(new Date(date));
-      }
-      date.setDate(date.getDate() + 1);
+        console.log('Data processed and saved successfully.');
+    } else {
+        console.log('Failed to fetch or process the HTML.');
     }
-  }
-  return days;
 }
 
-function formatNumber(number) {
-  return number < 10 ? '0' + number : number;
-}
 
-function formatDays(days) {
-  const result = [];
-  let currentMonth = -1;
-  days.forEach(date => {
-    if (date.getMonth() !== currentMonth) {
-      currentMonth = date.getMonth();
-    }
-    const day = formatNumber(date.getDate());
-    const month = formatNumber(date.getMonth() + 1);
-    result.push(`${day}-${month}-${date.getFullYear()}`);
-  });
-  return result;
-}
-
-function countDaysPerMonth(days) {
-  const counts = Array(12).fill(0);
-  days.forEach(date => {
-    counts[date.getMonth()]++;
-  });
-  return counts.map((count, index) => `${monthNames[index]}: ${count}`);
-}
-
-  
-const year = 2017;
-const days = getDaysInYear(year);
-const formattedDays = formatDays(days).join('\n');
-const dayCounts = countDaysPerMonth(days);
-
-console.log(dayCounts);
-  
-var url = `https://www.ketquadientoan.com/tat-ca-ky-xo-so-mega-6-45.html?datef=${date}&datet=31-12-${year}`
-
-if(year > 2016){
-    getResults(url, dayCounts, year)
-}else if (year == GetYear()){
-    
-}
-
+const url = `https://www.ketquadientoan.com/tat-ca-ky-xo-so-mega-6-45.html?datef=20-07-2016&datet=16-07-2024`
+Main(url);
 
 
